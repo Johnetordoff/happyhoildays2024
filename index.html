@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Center for Open Curling Game</title>
+<style>
+  body {
+    margin: 0;
+    background: #333;
+    font-family: sans-serif;
+    color: #fff;
+    text-align: center;
+    user-select: none;
+  }
+  #shotLog {
+    background: #222;
+    padding: 10px;
+    font-size: 14px;
+    color: #ccc;
+  }
+  #instructions {
+    margin: 10px;
+    font-size: 14px;
+  }
+  #result {
+    font-size: 18px;
+    font-weight: bold;
+    margin: 10px;
+  }
+  canvas {
+    display: block;
+    margin: 20px auto;
+    background: #aaa;
+    border: 2px solid #444;
+    cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<div id="shotLog">Shot Log:</div>
+<h1>Open Curling Game</h1>
+<div id="instructions">
+  There's no sweeping scieticific mistakes under the rug, so pre-register your angle and prove your hypothesis.
+  <h3>COME ON BABY PUT THE ROCK IN THE HOUSE!!!</h3>
+</div>
+<canvas id="gameCanvas" width="300" height="800"></canvas>
+<div id="result"></div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Game constants
+  const friction = 0.02;         // How quickly the stone slows down
+  const stoneRadius = 15;         // Radius of the curling stone
+  const startX = canvas.width / 2;  // Start at bottom center
+  const startY = canvas.height - 50;
+  const houseCenterX = canvas.width / 2; // House at top center
+  const houseCenterY = 100;
+  const houseRadii = [50, 30, 10]; // Radii for the house rings
+
+  // Stone variables
+  let stoneX = startX;
+  let stoneY = startY;
+  let stoneVx = 0;
+  let stoneVy = 0;
+
+  let dragging = false;
+  let mouseX = 0;
+  let mouseY = 0;
+
+  let stoneMoving = false;
+  let finalDistance = null;
+
+  let shots = []; // array of {power, angle, distance (optional)}
+
+  let waitingForReset = false; // To ensure we don't reset mid-timer
+
+  function resetGame() {
+    stoneX = startX;
+    stoneY = startY;
+    stoneVx = 0;
+    stoneVy = 0;
+    stoneMoving = false;
+    finalDistance = null;
+    waitingForReset = false;
+    document.getElementById('result').textContent = "";
+  }
+
+  function draw() {
+    ctx.clearRect(0,0, canvas.width, canvas.height);
+
+    // Draw "ice"
+    ctx.fillStyle = '#add8e6';
+    ctx.fillRect(0,0, canvas.width, canvas.height);
+
+    // Draw house (target) at top
+    for (let i = 0; i < houseRadii.length; i++) {
+      ctx.beginPath();
+      if(i === 0) ctx.fillStyle = '#ffffff'; // outermost ring - white
+      if(i === 1) ctx.fillStyle = '#0000ff'; // middle ring - blue
+      if(i === 2) ctx.fillStyle = '#ff0000'; // center ring - red
+      ctx.arc(houseCenterX, houseCenterY, houseRadii[i], 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // Draw stone
+    ctx.beginPath();
+    ctx.fillStyle = '#777';
+    ctx.arc(stoneX, stoneY, stoneRadius, 0, Math.PI*2);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#444';
+    ctx.stroke();
+
+    // If dragging, draw the aiming line and text
+    if (dragging) {
+      // Draw the line
+      ctx.beginPath();
+      ctx.moveTo(stoneX, stoneY);
+      ctx.lineTo(mouseX, mouseY);
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Arrowhead
+      const dx = mouseX - stoneX;
+      const dy = mouseY - stoneY;
+      const angle = Math.atan2(dy, dx);
+      const arrowLen = 10;
+      const endX = stoneX + dx;
+      const endY = stoneY + dy;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - arrowLen * Math.cos(angle - Math.PI/6),
+                 endY - arrowLen * Math.sin(angle - Math.PI/6));
+      ctx.lineTo(endX - arrowLen * Math.cos(angle + Math.PI/6),
+                 endY - arrowLen * Math.sin(angle + Math.PI/6));
+      ctx.lineTo(endX, endY);
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fill();
+
+      // Compute current power and angle in degrees
+      const power = Math.sqrt(dx*dx + dy*dy) * 0.01;
+      const angleDegrees = angle * (180/Math.PI);
+
+      // Text at midpoint
+      const midX = (stoneX + mouseX)/2;
+      const midY = (stoneY + mouseY)/2;
+      ctx.fillStyle = '#000';
+      ctx.font = '14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`Power: ${power.toFixed(2)}  Angle: ${angleDegrees.toFixed(2)}°`, midX, midY - 10);
+    }
+  }
+
+  function update() {
+    if (stoneMoving) {
+      stoneX += stoneVx;
+      stoneY += stoneVy;
+
+      // Check out-of-bounds
+      if (stoneX < -stoneRadius || stoneX > canvas.width + stoneRadius ||
+          stoneY < -stoneRadius || stoneY > canvas.height + stoneRadius) {
+        resetGame();
+        return;
+      }
+
+      // Apply friction
+      const speed = Math.sqrt(stoneVx*stoneVx + stoneVy*stoneVy);
+      if (speed > 0) {
+        const newSpeed = Math.max(speed - friction, 0);
+        if (newSpeed === 0 && !waitingForReset) {
+          // Stone stops
+          stoneVx = 0;
+          stoneVy = 0;
+          stoneMoving = false;
+
+          // Distance from center
+          finalDistance = Math.sqrt((stoneX - houseCenterX)**2 + (stoneY - houseCenterY)**2);
+          document.getElementById('result').textContent =
+            "You stopped " + Math.round(finalDistance) + " px from the center!";
+
+          // Wait 5 seconds, then add to shot log and reset
+          waitingForReset = true;
+          setTimeout(() => {
+            if (shots.length > 0) {
+              // Add distance to the last shot in the array
+              shots[shots.length - 1].distance = finalDistance;
+              updateShotLog();
+            }
+            resetGame();
+          }, 5000);
+        } else {
+          // Scale velocity down proportionally
+          const ratio = newSpeed / speed;
+          stoneVx *= ratio;
+          stoneVy *= ratio;
+        }
+      }
+    }
+  }
+
+  function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+  }
+
+  function updateShotLog() {
+    const shotLogDiv = document.getElementById('shotLog');
+    let html = "Shot Log:<br>";
+    shots.forEach((shot, index) => {
+      html += `Shot ${index+1}: Power = ${shot.power.toFixed(2)}, Angle = ${shot.angle.toFixed(2)}°, Distance = ${shot.distance ? shot.distance.toFixed(2) : "N/A"} px<br>`;
+    });
+    shotLogDiv.innerHTML = html;
+  }
+
+  // Event handling
+  canvas.addEventListener('mousedown', function(e) {
+    if (!stoneMoving && !waitingForReset) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      // Check if clicked on stone
+      const dx = mx - stoneX;
+      const dy = my - stoneY;
+      if (dx*dx + dy*dy <= stoneRadius*stoneRadius) {
+        dragging = true;
+        mouseX = mx;
+        mouseY = my;
+      }
+    }
+  });
+
+  canvas.addEventListener('mousemove', function(e) {
+    if (dragging) {
+      const rect = canvas.getBoundingClientRect();
+      mouseX = e.clientX - rect.left;
+      mouseY = e.clientY - rect.top;
+    }
+  });
+
+  canvas.addEventListener('mouseup', function(e) {
+    if (dragging) {
+      dragging = false;
+      const dx = mouseX - stoneX;
+      const dy = mouseY - stoneY;
+
+      const power = Math.sqrt(dx*dx + dy*dy) * 0.1;
+      if (power > 0) {
+        const angleRadians = Math.atan2(dy, dx);
+        const angleDegrees = angleRadians * (180/Math.PI);
+        stoneVx = Math.cos(angleRadians) * power;
+        stoneVy = Math.sin(angleRadians) * power;
+        stoneMoving = true;
+        finalDistance = null;
+        document.getElementById('result').textContent = "";
+
+        // Reset stone position before shooting
+        stoneX = startX;
+        stoneY = startY;
+
+        // Log shot (distance added after stone stops)
+        shots.push({power: power, angle: angleDegrees});
+        updateShotLog();
+      }
+    }
+  });
+
+  // Start loop
+  gameLoop();
+})();
+</script>
+</body>
+</html>
